@@ -105,7 +105,7 @@ asdf install
 npm install
 cp docker-compose.yml.sample docker-compose.yml
 docker compose up -d
-npm run link
+npm run lint
 npm run test
 ```
 
