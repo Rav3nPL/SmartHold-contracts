@@ -1,61 +1,25 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity 0.8.4;
-
-interface IERC20 {
-    function totalSupply() external view returns (uint256);
-
-    function balanceOf(address account) external view returns (uint256);
-
-    function transfer(address recipient, uint256 amount)
-        external
-        returns (bool);
-
-    function allowance(address owner, address spender)
-        external
-        view
-        returns (uint256);
-
-    function approve(address spender, uint256 amount) external returns (bool);
-
-    function transferFrom(
-        address sender,
-        address recipient,
-        uint256 amount
-    ) external returns (bool);
-
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    event Approval(
-        address indexed owner,
-        address indexed spender,
-        uint256 value
-    );
-}
-
-interface PriceFeedInterface {
-    function latestRoundData()
-        external
-        view
-        returns (
-            uint80 roundId,
-            int256 answer,
-            uint256 startedAt,
-            uint256 updatedAt,
-            uint80 answeredInRound
-        );
-}
+import "./interfaces.sol";
 
 pragma solidity 0.8.4;
 
 contract SmartHoldERC20 {
     address public immutable owner = msg.sender;
     uint256 public immutable createdAt = block.timestamp;
-    mapping(string => uint256) public lockForDaysDurations;
-    mapping(string => int256) public minExpectedPrices;
-    mapping(string => int256) public pricePrecisions;
-    mapping(string => address) public priceFeeds;
-    mapping(string => address) public tokenAddresses;
-    string[] public tokens;
+
+    address constant ZERO = address(0x0);
+
+    struct Token {
+        uint256 lockForDaysDurations;
+        int256 minExpectedPrices;
+        int256 pricePrecisions;
+        address priceFeeds;
+        address tokenAddresses;
+    }
+    Token[] public tokens;
+
+    mapping(address => uint256) public tokenIndex;
 
     modifier restricted() {
         require(msg.sender == owner, "Access denied!");
@@ -63,91 +27,85 @@ contract SmartHoldERC20 {
     }
 
     function configureToken(
-        string memory _symbol,
         address _tokenAddress,
         uint256 _lockForDays,
         address _feedAddress,
         int256 _minExpectedPrice,
         int256 _pricePrecision
     ) external restricted {
+        require(tokenIndex[_tokenAddress] == 0, "Token already configured!");
+
         require(_lockForDays > 0, "Invalid lockForDays value.");
         require(_minExpectedPrice >= 0, "Invalid minExpectedPrice value.");
-        require(
-            lockForDaysDurations[_symbol] == 0,
-            "Token already configured!"
-        );
-
         if (
-            (_feedAddress == address(0) && _minExpectedPrice != 0) ||
-            (_minExpectedPrice == 0 && _feedAddress != address(0))
+            (_feedAddress == ZERO && _minExpectedPrice != 0) ||
+            (_minExpectedPrice == 0 && _feedAddress != ZERO)
         ) {
             require(false, "Invalid price configuration!");
         }
 
-        if (_feedAddress != address(0)) {
+        if (_feedAddress != ZERO) {
             // check feed address interface
             PriceFeedInterface(_feedAddress).latestRoundData();
         }
-
-        tokens.push(_symbol);
-        lockForDaysDurations[_symbol] = _lockForDays;
-        tokenAddresses[_symbol] = _tokenAddress;
-        priceFeeds[_symbol] = _feedAddress;
-        minExpectedPrices[_symbol] = _minExpectedPrice;
-        pricePrecisions[_symbol] = _pricePrecision;
+        Token memory newOne;
+        newOne.lockForDaysDurations = _lockForDays;
+        newOne.tokenAddresses = _tokenAddress;
+        newOne.priceFeeds = _feedAddress;
+        newOne.minExpectedPrices = _minExpectedPrice;
+        newOne.pricePrecisions = _pricePrecision;
+        tokens.push(newOne);
+        tokenIndex[_tokenAddress] = tokens.length; // we are missing "0" for reasons
     }
 
     function increaseMinExpectedPrice(
-        string memory _symbol,
+        address _symbol,
         int256 _newMinExpectedPrice
     ) external restricted {
+        require(tokenIndex[_symbol] != 0, "Token not yet configured!");
+        Token storage t = tokens[tokenIndex[_symbol] - 1];
         require(
-            lockForDaysDurations[_symbol] != 0,
-            "Token not yet configured!"
-        );
-        require(
-            minExpectedPrices[_symbol] < _newMinExpectedPrice,
+            t.minExpectedPrices < _newMinExpectedPrice,
             "New price value invalid!"
         );
-        minExpectedPrices[_symbol] = _newMinExpectedPrice;
+        t.minExpectedPrices = _newMinExpectedPrice;
     }
 
-    function increaseLockForDays(string memory _symbol, uint256 _newLockForDays)
+    function increaseLockForDays(address _symbol, uint256 _newLockForDays)
         external
         restricted
     {
+        require(tokenIndex[_symbol] != 0, "Token not yet configured!");
+        Token storage t = tokens[tokenIndex[_symbol] - 1];
         require(
-            lockForDaysDurations[_symbol] != 0,
-            "Token not yet configured!"
-        );
-        require(
-            lockForDaysDurations[_symbol] < _newLockForDays,
+            t.lockForDaysDurations < _newLockForDays,
             "New lockForDays value invalid!"
         );
-        lockForDaysDurations[_symbol] = _newLockForDays;
+        t.lockForDaysDurations = _newLockForDays;
     }
 
-    function getPrice(string memory _symbol) public view returns (int256) {
-        if (priceFeeds[_symbol] == address(0)) {
+    function getPrice(address _symbol) public view returns (int256) {
+        Token storage t = tokens[tokenIndex[_symbol] - 1];
+        if (t.priceFeeds == ZERO) {
             return 0;
         }
 
-        (, int256 price, , , ) = PriceFeedInterface(priceFeeds[_symbol])
-        .latestRoundData();
-        return price / pricePrecisions[_symbol];
+        (, int256 price, , , ) =
+            PriceFeedInterface(t.priceFeeds).latestRoundData();
+        return price / t.pricePrecisions;
     }
 
-    function canWithdraw(string memory _symbol) public view returns (bool) {
-        require(lockForDaysDurations[_symbol] != 0, "Token not yet configured");
+    function canWithdraw(address _symbol) public view returns (bool) {
+        require(tokenIndex[_symbol] != 0, "Token not yet configured!");
+        Token storage t = tokens[tokenIndex[_symbol] - 1];
 
-        uint256 releaseAt = createdAt +
-            (lockForDaysDurations[_symbol] * 1 days);
+        uint256 releaseAt = createdAt + (t.lockForDaysDurations * 1 days);
 
         if (releaseAt < block.timestamp) {
             return true;
-        } else if (minExpectedPrices[_symbol] == 0) {
+        } else if (t.minExpectedPrices == 0) {
             return false;
-        } else if (minExpectedPrices[_symbol] < getPrice(_symbol)) {
+        } else if (t.minExpectedPrices < getPrice(_symbol)) {
             return true;
         } else return false;
     }
@@ -157,8 +115,8 @@ contract SmartHoldERC20 {
         view
         returns (int256)
     {
-        (, int256 price, , , ) = PriceFeedInterface(_feedAddress)
-        .latestRoundData();
+        (, int256 price, , , ) =
+            PriceFeedInterface(_feedAddress).latestRoundData();
         return price / _precision;
     }
 
@@ -166,17 +124,21 @@ contract SmartHoldERC20 {
         return tokens.length;
     }
 
-    function withdraw(string memory _symbol) external restricted {
+    function withdraw(address _symbol) external restricted {
         require(canWithdraw(_symbol), "You cannot withdraw yet.");
 
-        if (keccak256(bytes(_symbol)) == keccak256(bytes("ETH"))) {
+        if (_symbol == ZERO) {
             payable(owner).transfer(address(this).balance);
         } else {
-            IERC20 token = IERC20(tokenAddresses[_symbol]);
+            IERC20 token = IERC20(_symbol);
             uint256 tokenBalance = token.balanceOf(address(this));
-            token.transfer(owner, tokenBalance);
+            if (tokenBalance > 0) {
+                token.transfer(owner, tokenBalance);
+            }
         }
     }
 
-    receive() external payable {}
+    receive() external payable {
+        require(tokenIndex[ZERO] != 0, "ETH not configured");
+    }
 }
