@@ -10,6 +10,9 @@ contract SmartHoldERC20 {
 
     address constant ZERO = address(0x0);
 
+    string constant ERRNOTCONFIGURED = "Token not configured";
+    string constant ERRBADCONFIG = "Invalid price configuration";
+
     struct Token {
         uint256 lockForDaysDurations;
         int256 minExpectedPrices;
@@ -35,19 +38,17 @@ contract SmartHoldERC20 {
     ) external restricted {
         require(tokenIndex[_tokenAddress] == 0, "Token already configured!");
 
-        require(_lockForDays > 0, "Invalid lockForDays value.");
-        require(_minExpectedPrice >= 0, "Invalid minExpectedPrice value.");
-        if (
-            (_feedAddress == ZERO && _minExpectedPrice != 0) ||
-            (_minExpectedPrice == 0 && _feedAddress != ZERO)
-        ) {
-            require(false, "Invalid price configuration!");
-        }
+        require(_lockForDays > 0, "Invalid lockForDays");
+        require(_minExpectedPrice >= 0, "Invalid minExpectedPrice");
 
-        if (_feedAddress != ZERO) {
+        if (_minExpectedPrice == 0) {
+            require(_feedAddress == ZERO, ERRBADCONFIG);
+        } else {
+            require(_feedAddress != ZERO, ERRBADCONFIG);
             // check feed address interface
             PriceFeedInterface(_feedAddress).latestRoundData();
         }
+
         Token memory newOne;
         newOne.lockForDaysDurations = _lockForDays;
         newOne.tokenAddresses = _tokenAddress;
@@ -62,11 +63,11 @@ contract SmartHoldERC20 {
         address _symbol,
         int256 _newMinExpectedPrice
     ) external restricted {
-        require(tokenIndex[_symbol] != 0, "Token not yet configured!");
+        require(tokenIndex[_symbol] != 0, ERRNOTCONFIGURED);
         Token storage t = tokens[tokenIndex[_symbol] - 1];
         require(
             t.minExpectedPrices < _newMinExpectedPrice,
-            "New price value invalid!"
+            "invalid price value"
         );
         t.minExpectedPrices = _newMinExpectedPrice;
     }
@@ -75,11 +76,11 @@ contract SmartHoldERC20 {
         external
         restricted
     {
-        require(tokenIndex[_symbol] != 0, "Token not yet configured!");
+        require(tokenIndex[_symbol] != 0, ERRNOTCONFIGURED);
         Token storage t = tokens[tokenIndex[_symbol] - 1];
         require(
             t.lockForDaysDurations < _newLockForDays,
-            "New lockForDays value invalid!"
+            "invalid lockForDays value"
         );
         t.lockForDaysDurations = _newLockForDays;
     }
@@ -96,7 +97,7 @@ contract SmartHoldERC20 {
     }
 
     function canWithdraw(address _symbol) public view returns (bool) {
-        require(tokenIndex[_symbol] != 0, "Token not yet configured!");
+        require(tokenIndex[_symbol] != 0, ERRNOTCONFIGURED);
         Token storage t = tokens[tokenIndex[_symbol] - 1];
 
         uint256 releaseAt = createdAt + (t.lockForDaysDurations * 1 days);
@@ -125,7 +126,7 @@ contract SmartHoldERC20 {
     }
 
     function withdraw(address _symbol) external restricted {
-        require(canWithdraw(_symbol), "You cannot withdraw yet.");
+        require(canWithdraw(_symbol), "Cannot withdraw");
 
         if (_symbol == ZERO) {
             payable(owner).transfer(address(this).balance);
